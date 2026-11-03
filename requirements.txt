@@ -1,0 +1,4 @@
+pyscipopt>=5.0
+numpy>=1.24
+pandas>=2.0
+pysddp==0.0.90
