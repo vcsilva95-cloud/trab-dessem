@@ -1,0 +1,5 @@
+entrypoint=app.py
+model=modelo.py
+requirements=requirements.txt
+theme=.streamlit/config.toml
+solver=PySCIPOpt

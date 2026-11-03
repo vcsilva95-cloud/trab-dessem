@@ -1,4 +1,6 @@
-pyscipopt>=5.0
+streamlit>=1.40
+plotly>=5.24
+pyscipopt==6.3.0
 numpy>=1.24
 pandas>=2.0
 pysddp==0.0.90
