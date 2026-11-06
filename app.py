@@ -26,21 +26,149 @@ st.set_page_config(
 )
 
 # Garantia visual adicional, inclusive para componentes que nao herdam o tema.
+# Tema claro forcado para todos os componentes do Streamlit
 st.markdown(
     """
     <style>
-    .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
+
+    /* Pagina e barra lateral */
+    .stApp,
+    [data-testid="stAppViewContainer"],
+    [data-testid="stHeader"] {
         background-color: #FFFFFF !important;
         color: #000000 !important;
     }
-    [data-testid="stSidebar"], [data-testid="stSidebarContent"] {
+
+    [data-testid="stSidebar"],
+    [data-testid="stSidebarContent"] {
         background-color: #F7F7F7 !important;
         color: #000000 !important;
     }
-    html, body, p, label, div, span, h1, h2, h3, h4, h5, h6,
-    [data-testid="stMarkdownContainer"], [data-testid="stMetricValue"],
-    [data-testid="stMetricLabel"] { color: #000000 !important; }
-    input, textarea { color: #000000 !important; background-color: #FFFFFF !important; }
+
+    /* Textos gerais */
+    html, body, p, label, span,
+    h1, h2, h3, h4, h5, h6,
+    [data-testid="stMarkdownContainer"],
+    [data-testid="stMetricValue"],
+    [data-testid="stMetricLabel"] {
+        color: #000000 !important;
+    }
+
+    /* Campos numericos e de texto */
+    input,
+    textarea {
+        color: #000000 !important;
+        background-color: #FFFFFF !important;
+        -webkit-text-fill-color: #000000 !important;
+    }
+
+    /* Number input completo */
+    [data-testid="stNumberInput"] > div,
+    [data-testid="stNumberInput"] div[data-baseweb="input"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+
+    /* Botoes + e - dos campos numericos */
+    [data-testid="stNumberInput"] button {
+        background-color: #EEEEEE !important;
+        color: #000000 !important;
+        border-color: #BDBDBD !important;
+    }
+
+    [data-testid="stNumberInput"] button:hover {
+        background-color: #DADADA !important;
+        color: #000000 !important;
+    }
+
+    /* Selectbox */
+    div[data-baseweb="select"] > div {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        border-color: #BDBDBD !important;
+    }
+
+    div[data-baseweb="select"] span {
+        color: #000000 !important;
+    }
+
+    /* Botoes comuns */
+    .stButton > button {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        border: 1px solid #666666 !important;
+    }
+
+    .stButton > button:hover {
+        background-color: #EAEAEA !important;
+        color: #000000 !important;
+        border-color: #000000 !important;
+    }
+
+    /* Botao de download */
+    .stDownloadButton > button {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        border: 1px solid #666666 !important;
+    }
+
+    .stDownloadButton > button:hover {
+        background-color: #EAEAEA !important;
+        color: #000000 !important;
+        border-color: #000000 !important;
+    }
+
+    /* Expanders das termicas */
+    [data-testid="stExpander"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        border-color: #999999 !important;
+    }
+
+    [data-testid="stExpander"] summary {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+
+    /* Radio buttons */
+    [data-testid="stRadio"] label,
+    [data-testid="stRadio"] p {
+        color: #000000 !important;
+    }
+
+    /* Checkbox */
+    [data-testid="stCheckbox"] label,
+    [data-testid="stCheckbox"] p {
+        color: #000000 !important;
+    }
+
+    /* Upload de CSV */
+    [data-testid="stFileUploader"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+
+    [data-testid="stFileUploader"] button {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        border: 1px solid #666666 !important;
+    }
+
+    /* Dataframes */
+    [data-testid="stDataFrame"] {
+        color: #000000 !important;
+        background-color: #FFFFFF !important;
+    }
+
+    /* Alertas do Streamlit */
+    [data-testid="stAlert"] {
+        color: #000000 !important;
+    }
+
+    [data-testid="stAlert"] p {
+        color: #000000 !important;
+    }
+
     </style>
     """,
     unsafe_allow_html=True,
