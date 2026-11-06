@@ -161,14 +161,31 @@ st.markdown(
     }
 
     /* Alertas do Streamlit */
+    /* Caixas de aviso, informacao, sucesso e alerta */
     [data-testid="stAlert"] {
-        color: #000000 !important;
+      background-color: #F2F2F2 !important;
+      color: #000000 !important;
+      border: 1px solid #BDBDBD !important;
     }
 
-    [data-testid="stAlert"] p {
-        color: #000000 !important;
+    [data-testid="stAlert"] p,
+    [data-testid="stAlert"] div,
+    [data-testid="stAlert"] span {
+      color: #000000 !important;
     }
 
+    .caixa-clara {
+        background-color: #F2F2F2 !important;
+        color: #000000 !important;
+        padding: 14px 18px;
+        border: 1px solid #BDBDBD;
+        border-radius: 8px;
+        margin: 10px 0;
+        font-size: 15px;
+    }
+    .caixa-clara, .caixa-clara * {
+        color: #000000 !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -284,21 +301,42 @@ with st.sidebar:
     st.caption("Horizonte fixo: 168 h, 336 periodos de 30 min e 48 patamares por dia.")
 
     st.subheader("Carga")
-    media_carga = st.number_input("Carga media semanal (MW)", min_value=1.0, value=500.0, step=10.0)
-    modo_carga = st.radio("Forma de entrada da carga", ["Perfil sintetico", "Editar tabela", "Enviar CSV"])
-    carga = curva_carga_semanal(media_carga)
-    if modo_carga == "Editar tabela":
-        tabela_carga = pd.DataFrame({"periodo": range(N_PERIODOS), "carga_mw": carga})
-        tabela_carga = st.data_editor(tabela_carga, hide_index=True, disabled=["periodo"], height=260)
-        carga = tabela_carga["carga_mw"].astype(float).tolist()
-    elif modo_carga == "Enviar CSV":
-        arquivo = st.file_uploader("CSV com coluna carga_mw e 336 linhas", type=["csv"])
-        if arquivo is not None:
-            recebido = pd.read_csv(arquivo)
-            if "carga_mw" not in recebido.columns or len(recebido) != N_PERIODOS:
-                st.error("O CSV deve conter a coluna carga_mw e exatamente 336 linhas.")
-            else:
-                carga = recebido["carga_mw"].astype(float).tolist()
+    cenario_carga = st.radio(
+        "Cenario de carga",
+        ["Verao", "Inverno"],
+        horizontal=True,
+        help="Seleciona a curva semanal de carga com 336 periodos de 30 minutos.",
+    )
+    percentual_carga = st.slider(
+        "Nivel da carga (%)",
+        min_value=80,
+        max_value=120,
+        value=100,
+        step=1,
+        help="Aplica um fator uniforme entre 80% e 120% sobre toda a curva selecionada.",
+    )
+    arquivo_carga = "VERAO.csv" if cenario_carga == "Verao" else "INVERNO.csv"
+    try:
+        tabela_carga = pd.read_csv(arquivo_carga, sep=";")
+        tabela_carga.columns = [str(coluna).strip() for coluna in tabela_carga.columns]
+        if "carga_mw" not in tabela_carga.columns or len(tabela_carga) != N_PERIODOS:
+            st.error(f"O arquivo {arquivo_carga} deve conter a coluna carga_mw e exatamente {N_PERIODOS} linhas.")
+            st.stop()
+        carga_base = pd.to_numeric(tabela_carga["carga_mw"], errors="raise").to_numpy(dtype=float)
+        carga = (carga_base * percentual_carga / 100.0).tolist()
+        st.caption(
+            f"Curva selecionada: {cenario_carga} | Ajuste: {percentual_carga}% | "
+            f"Carga media: {sum(carga)/len(carga):.1f} MW"
+        )
+    except FileNotFoundError:
+        st.error(
+            f"Arquivo {arquivo_carga} nao encontrado. Mantenha VERAO.csv e INVERNO.csv "
+            "na mesma pasta do app.py."
+        )
+        st.stop()
+    except (ValueError, TypeError) as erro_carga:
+        st.error(f"Nao foi possivel ler {arquivo_carga}: {erro_carga}")
+        st.stop()
 
     st.subheader("UHE Chavantes")
     vi = st.number_input("Volume inicial (hm3)", min_value=float(base.uhe.volume_min_hm3), max_value=float(base.uhe.volume_max_hm3), value=float(base.uhe.volume_inicial_hm3), step=10.0)
@@ -355,7 +393,14 @@ if executar:
 
 resultado = st.session_state.get("resultado")
 if not resultado:
-    st.info("Ajuste os dados na barra lateral e clique em Executar otimizacao.")
+    st.markdown(
+        """
+        <div class="caixa-clara">
+            Ajuste os dados na barra lateral e clique em <b>Executar otimizacao</b>.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.stop()
 
 if "resultados" not in resultado:
@@ -379,7 +424,14 @@ if resultado.get("meta_reservatorio_ativa"):
     else:
         st.warning(f"Nao foi possivel atender integralmente a meta de {resultado['meta_reservatorio_hm3']:.2f} hm3. Desvio = {resultado['desvio_meta_hm3']:.2f} hm3.")
 if resultado.get("considerar_fcf"):
-    st.info(f"FCF considerada no custo total: R$ {resultado['custo_futuro_rs']:,.2f}.")
+    st.markdown(
+        f"""
+        <div class="caixa-clara">
+            FCF considerada no custo total: <b>R$ {resultado['custo_futuro_rs']:,.2f}</b>.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 col_tb = "termobahia_ug1_mw"
 col_cg = "campina_grande_ug1_mw"
