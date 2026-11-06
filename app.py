@@ -175,6 +175,7 @@ with st.sidebar:
     st.subheader("UHE Chavantes")
     vi = st.number_input("Volume inicial (hm3)", min_value=float(base.uhe.volume_min_hm3), max_value=float(base.uhe.volume_max_hm3), value=float(base.uhe.volume_inicial_hm3), step=10.0)
     afl = st.number_input("Vazao afluente constante (m3/s)", min_value=0.0, value=float(base.uhe.vazao_afluente_m3s), step=10.0)
+    seguir_meta = st.checkbox("Seguir meta de reservatorio", value=False, help="Quando marcada, a meta entra no modelo com penalidade por desvio.")
     meta = st.number_input("Meta de volume final (hm3)", min_value=float(base.uhe.volume_min_hm3), max_value=float(base.uhe.volume_max_hm3), value=float(base.uhe.volume_inicial_hm3), step=10.0)
 
     st.subheader("Termicas")
@@ -183,6 +184,9 @@ with st.sidebar:
         editor_termica(base.termicas[1], "cg"),
     ]
 
+    st.subheader("Funcao de custo futuro")
+    considerar_fcf = st.radio("Considerar FCF?", ["Nao", "Sim"], horizontal=True, help="Calcula uma FCF mensal por PL unico continuo e a inclui no custo do MILP semanal.") == "Sim"
+    pontos_fcf = st.slider("Pontos da curva da FCF", min_value=5, max_value=41, value=21, step=2, disabled=not considerar_fcf)
     st.subheader("Custos e solver")
     cdef = st.number_input("Custo de deficit (R$/MWh)", min_value=0.0, value=float(base.custo_deficit_rs_mwh), step=100.0)
     gap = st.number_input("Gap relativo do SCIP", min_value=0.0, max_value=1.0, value=float(base.gap_relativo), step=0.0001, format="%.4f")
@@ -195,9 +199,12 @@ entradas = {
     "gap_relativo": gap,
     "limite_tempo_s": None if limite == 0 else float(limite),
     "exibir_log_solver": False,
+    "considerar_fcf": considerar_fcf,
+    "numero_pontos_fcf": pontos_fcf,
     "uhe": {
         "volume_inicial_hm3": vi,
         "volume_meta_final_hm3": meta,
+        "cumprir_meta_reservatorio": seguir_meta,
         "vazao_afluente_m3s": afl,
     },
     "termicas": termicas,
@@ -229,6 +236,8 @@ if "resultados" not in resultado:
     st.stop()
 
 df = resultado["resultados"].copy()
+for coluna in ["deficit_mw", "excesso_mw"]:
+    df.loc[df[coluna].abs() < 1e-6, coluna] = 0.0
 df["hora_semana"] = df["periodo"] * DT_H
 
 m1, m2, m3, m4 = st.columns(4)
@@ -236,6 +245,13 @@ m1.metric("Status SCIP", resultado["status"])
 m2.metric("Custo total", f"R$ {resultado['custo_total_rs']:,.2f}")
 m3.metric("Gap", f"{100*resultado['gap']:.4f}%")
 m4.metric("Volume final", f"{resultado['volume_final_hm3']:.2f} hm3")
+if resultado.get("meta_reservatorio_ativa"):
+    if resultado.get("meta_reservatorio_atendida"):
+        st.success(f"Meta de reservatorio atendida: volume final = {resultado['volume_final_hm3']:.2f} hm3.")
+    else:
+        st.warning(f"Nao foi possivel atender integralmente a meta de {resultado['meta_reservatorio_hm3']:.2f} hm3. Desvio = {resultado['desvio_meta_hm3']:.2f} hm3.")
+if resultado.get("considerar_fcf"):
+    st.info(f"FCF considerada no custo total: R$ {resultado['custo_futuro_rs']:,.2f}.")
 
 col_tb = "termobahia_ug1_mw"
 col_cg = "campina_grande_ug1_mw"
@@ -258,6 +274,7 @@ with c2:
     fig3.add_trace(go.Scatter(x=df["hora_semana"], y=df["deficit_mw"], name="Deficit", line=dict(color=CORES["Deficit"], width=3)))
     fig3.add_trace(go.Scatter(x=df["hora_semana"], y=df["excesso_mw"], name="Excesso", line=dict(color="#7F7F7F", width=2)))
     estilo_figura(fig3, "Deficit e excesso", "Potencia (MW)")
+    fig3.update_yaxes(tickformat=".3f", rangemode="tozero")
     st.plotly_chart(fig3, width="stretch", theme=None)
 
 st.subheader("Resultados por periodo")
