@@ -72,6 +72,7 @@ class Hidreletrica:
     volume_meta_final_hm3: Optional[float] = None
     penalidade_vertimento_rs_hm3: float = 0.01
     penalidade_volume_final_rs_hm3: float = 500.0
+    cumprir_meta_reservatorio: bool = True
 
 
 @dataclass
@@ -84,6 +85,8 @@ class Sistema:
     limite_tempo_s: Optional[float] = None
     gap_relativo: float = 0.001
     exibir_log_solver: bool = True
+    considerar_fcf: bool = False
+    numero_pontos_fcf: int = 21
 
 
 def curva_carga_semanal(media_mw: float = 500.0) -> List[float]:
@@ -141,7 +144,8 @@ def aplicar_entradas(base: Sistema, entradas: Dict[str, Any]) -> Sistema:
     """Atualiza o objeto Sistema a partir de um dicionario/JSON da interface."""
     dados = asdict(base)
     for chave in ("carga_mw", "custo_deficit_rs_mwh", "reserva_percentual",
-                  "limite_tempo_s", "gap_relativo", "exibir_log_solver"):
+                  "limite_tempo_s", "gap_relativo", "exibir_log_solver",
+                  "considerar_fcf", "numero_pontos_fcf"):
         if chave in entradas:
             dados[chave] = entradas[chave]
     if "uhe" in entradas:
@@ -163,6 +167,8 @@ def aplicar_entradas(base: Sistema, entradas: Dict[str, Any]) -> Sistema:
         limite_tempo_s=dados["limite_tempo_s"],
         gap_relativo=float(dados["gap_relativo"]),
         exibir_log_solver=bool(dados["exibir_log_solver"]),
+        considerar_fcf=bool(dados.get("considerar_fcf", False)),
+        numero_pontos_fcf=int(dados.get("numero_pontos_fcf", 21)),
     )
 
 
@@ -197,6 +203,48 @@ def _soma_eventos(var, inicio: int, fim: int):
     return quicksum(var[k] for k in indices)
 
 
+
+def calcular_fcf(s: Sistema) -> Dict[str, List[float]]:
+    """Calcula uma FCF mensal simplificada por PL unico continuo.
+
+    Para cada volume inicial da malha, resolve 30 dias com carga constante igual
+    a media semanal. UHE e UTEs sao continuas, sem unit commitment. A FCF e o
+    custo minimo do mes futuro em funcao da agua disponivel ao fim da semana.
+    """
+    n_pontos = max(3, int(s.numero_pontos_fcf))
+    volumes = np.linspace(s.uhe.volume_min_hm3, s.uhe.volume_max_hm3, n_pontos)
+    carga_media = float(np.mean(s.carga_mw))
+    custos: List[float] = []
+    dt_fcf_h = 24.0
+    fator_hm3 = dt_fcf_h * 3600.0 / 1_000_000.0
+    n_dias = 30
+
+    for volume_inicial in volumes:
+        pl = Model("FCF_mensal_PL_unico")
+        pl.hideOutput()
+        Tm = range(n_dias)
+        Gm = range(len(s.termicas))
+        gh = {t: pl.addVar(lb=0.0, ub=s.uhe.geracao_max_mw) for t in Tm}
+        qt = {t: pl.addVar(lb=s.uhe.vazao_min_m3s, ub=s.uhe.vazao_turbinada_max_m3s) for t in Tm}
+        vol = {t: pl.addVar(lb=s.uhe.volume_min_hm3, ub=s.uhe.volume_max_hm3) for t in Tm}
+        vert = {t: pl.addVar(lb=0.0) for t in Tm}
+        gt = {(i, t): pl.addVar(lb=0.0, ub=s.termicas[i].pmax_mw) for i in Gm for t in Tm}
+        deficit = {t: pl.addVar(lb=0.0) for t in Tm}
+        excesso = {t: pl.addVar(lb=0.0) for t in Tm}
+        for t in Tm:
+            pl.addCons(gh[t] == s.uhe.produtibilidade_mw_por_m3s * qt[t])
+            anterior = float(volume_inicial) if t == 0 else vol[t-1]
+            pl.addCons(vol[t] == anterior + s.uhe.vazao_afluente_m3s*fator_hm3 - qt[t]*fator_hm3 - vert[t])
+            pl.addCons(gh[t] + quicksum(gt[i,t] for i in Gm) + deficit[t] - excesso[t] == carga_media)
+        custo = quicksum(dt_fcf_h*s.termicas[i].cvu_rs_mwh*gt[i,t] for i in Gm for t in Tm)
+        custo += quicksum(dt_fcf_h*s.custo_deficit_rs_mwh*deficit[t] + excesso[t] for t in Tm)
+        pl.setObjective(custo, "minimize")
+        pl.optimize()
+        if pl.getNSols() == 0:
+            raise RuntimeError(f"Nao foi possivel calcular a FCF para volume {volume_inicial:.2f} hm3.")
+        custos.append(float(pl.getObjVal()))
+    return {"volumes_hm3": volumes.tolist(), "custos_rs": custos}
+
 def construir_modelo(s: Sistema):
     validar(s)
     m = Model("PDO_hidrotermica_7_dias")
@@ -221,7 +269,9 @@ def construir_modelo(s: Sistema):
     vol = {t: m.addVar(lb=s.uhe.volume_min_hm3, ub=s.uhe.volume_max_hm3, name=f"vol_{t}") for t in T}
     deficit = {t: m.addVar(lb=0.0, name=f"deficit_{t}") for t in T}
     excesso = {t: m.addVar(lb=0.0, name=f"excesso_{t}") for t in T}
-    desvio_meta = m.addVar(lb=0.0, name="desvio_volume_final")
+    desvio_meta = m.addVar(lb=0.0, name="desvio_volume_final") if s.uhe.cumprir_meta_reservatorio else None
+    dados_fcf = calcular_fcf(s) if s.considerar_fcf else None
+    alpha_fcf = m.addVar(lb=0.0, name="custo_futuro") if s.considerar_fcf else None
 
     # Unit commitment, trajetorias e limites estaveis.
     for i, usina in enumerate(s.termicas):
@@ -294,7 +344,18 @@ def construir_modelo(s: Sistema):
     meta = s.uhe.volume_meta_final_hm3
     if meta is None:
         meta = s.uhe.volume_inicial_hm3
-    m.addCons(desvio_meta >= meta - vol[N_PERIODOS-1], name="meta_volume_final")
+    if s.uhe.cumprir_meta_reservatorio:
+        m.addCons(desvio_meta >= meta - vol[N_PERIODOS-1], name="meta_volume_final")
+
+    lambdas_fcf = None
+    if s.considerar_fcf and dados_fcf is not None:
+        vols_fcf = dados_fcf["volumes_hm3"]
+        custos_fcf = dados_fcf["custos_rs"]
+        lambdas_fcf = [m.addVar(lb=0.0, ub=1.0, name=f"lambda_fcf_{j}") for j in range(len(vols_fcf))]
+        m.addCons(quicksum(lambdas_fcf) == 1.0, name="fcf_combinacao_convexa")
+        m.addCons(vol[N_PERIODOS-1] == quicksum(vols_fcf[j]*lambdas_fcf[j] for j in range(len(vols_fcf))), name="fcf_ligacao_volume")
+        m.addCons(alpha_fcf == quicksum(custos_fcf[j]*lambdas_fcf[j] for j in range(len(vols_fcf))), name="fcf_ligacao_custo")
+        m.addConsSOS2(lambdas_fcf, weights=vols_fcf, name="fcf_interpolacao_sos2")
 
     custo = quicksum(
         DT_H * s.termicas[i].cvu_rs_mwh * gterm[i,t]
@@ -309,11 +370,15 @@ def construir_modelo(s: Sistema):
         + 1.0*excesso[t]
         for t in T
     )
-    custo += s.uhe.penalidade_volume_final_rs_hm3 * desvio_meta
+    if s.uhe.cumprir_meta_reservatorio:
+        custo += s.uhe.penalidade_volume_final_rs_hm3 * desvio_meta
+    if s.considerar_fcf:
+        custo += alpha_fcf
     m.setObjective(custo, "minimize")
 
     vars_ = dict(u=u, y=y, z=z, gterm=gterm, gh=gh, qt=qt, vert=vert,
-                 vol=vol, deficit=deficit, excesso=excesso, desvio_meta=desvio_meta)
+                 vol=vol, deficit=deficit, excesso=excesso, desvio_meta=desvio_meta,
+                 alpha_fcf=alpha_fcf, dados_fcf=dados_fcf)
     return m, vars_
 
 
@@ -338,8 +403,8 @@ def resolver(s: Optional[Sistema] = None) -> Dict[str, Any]:
             "vazao_turbinada_m3s": m.getVal(v["qt"][t]),
             "volume_hm3": m.getVal(v["vol"][t]),
             "vertimento_hm3": m.getVal(v["vert"][t]),
-            "deficit_mw": m.getVal(v["deficit"][t]),
-            "excesso_mw": m.getVal(v["excesso"][t]),
+            "deficit_mw": 0.0 if abs(m.getVal(v["deficit"][t])) < 1e-6 else m.getVal(v["deficit"][t]),
+            "excesso_mw": 0.0 if abs(m.getVal(v["excesso"][t])) < 1e-6 else m.getVal(v["excesso"][t]),
         }
         for i, ute in enumerate(s.termicas):
             prefixo = ute.nome.lower().replace(" ", "_")
@@ -354,6 +419,13 @@ def resolver(s: Optional[Sistema] = None) -> Dict[str, Any]:
         "custo_total_rs": float(m.getObjVal()),
         "gap": float(m.getGap()),
         "volume_final_hm3": float(df.iloc[-1]["volume_hm3"]),
+        "meta_reservatorio_ativa": bool(s.uhe.cumprir_meta_reservatorio),
+        "meta_reservatorio_hm3": float(s.uhe.volume_meta_final_hm3 if s.uhe.volume_meta_final_hm3 is not None else s.uhe.volume_inicial_hm3),
+        "meta_reservatorio_atendida": (not s.uhe.cumprir_meta_reservatorio) or float(df.iloc[-1]["volume_hm3"]) >= float(s.uhe.volume_meta_final_hm3 if s.uhe.volume_meta_final_hm3 is not None else s.uhe.volume_inicial_hm3) - 1e-4,
+        "desvio_meta_hm3": float(m.getVal(v["desvio_meta"])) if s.uhe.cumprir_meta_reservatorio else 0.0,
+        "considerar_fcf": bool(s.considerar_fcf),
+        "custo_futuro_rs": float(m.getVal(v["alpha_fcf"])) if s.considerar_fcf else 0.0,
+        "dados_fcf": v["dados_fcf"],
         "resultados": df,
     }
 
